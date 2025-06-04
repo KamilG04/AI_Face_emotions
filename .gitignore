@@ -1,0 +1,31 @@
+# Systemowe pliki macOS
+.DS_Store
+
+# Foldery środowiska wirtualnego
+venv/
+my_venv/
+
+# Dane treningowe i pliki tymczasowe
+data/
+checkpoints/
+logs/
+
+# Obrazy wynikowe, debug, itp.
+*.png
+
+# Pliki Pythona do testów, debugowania, itp.
+debug_landmarks.py
+test_model.py
+train_complete.py
+train_model.py
+live_detection.py
+
+# PyCharm / VSCode itp.
+.idea/
+.vscode/
+
+# Cache Pythona
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
