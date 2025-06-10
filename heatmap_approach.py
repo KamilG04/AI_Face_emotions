@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-WFLW Heatmap Network - Enhanced Version with TensorBoard Logging
-Professional implementation for facial landmark detection using heatmap regression.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,6 +11,34 @@ from pathlib import Path
 import time
 from typing import Tuple, Dict, List, Any, Optional
 import datetime
+
+class WingLoss(nn.Module):
+    """
+    Wing Loss for better landmark accuracy.
+    Better than MSE for small landmark errors.
+    """
+    def __init__(self, w=10.0, epsilon=2.0):
+        super(WingLoss, self).__init__()
+        self.w = w
+        self.epsilon = epsilon
+        
+    def forward(self, pred, target):
+        """
+        Args:
+            pred: Predicted heatmaps (B, N, H, W)
+            target: Target heatmaps (B, N, H, W)
+        """
+        diff = torch.abs(pred - target)
+        cond = diff < self.w
+        
+        loss = torch.where(
+            cond,
+            self.w * torch.log(1 + diff / self.epsilon),
+            diff - self.w + self.w * torch.log(1 + self.w / self.epsilon)
+        )
+        
+        return loss.mean()
+
 
 class WFLWHeatmapNetworkLarge(nn.Module):
     """
@@ -304,6 +325,11 @@ def create_landmark_visualization(images: torch.Tensor,
     """
     batch_size = min(4, images.size(0))
     
+    # ENSURE ALL ON CPU
+    images = images.cpu()
+    pred_landmarks = pred_landmarks.cpu()
+    target_landmarks = target_landmarks.cpu()
+    
     # Denormalize images
     mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
@@ -319,16 +345,16 @@ def create_landmark_visualization(images: torch.Tensor,
         img = images_denorm[i].clone()
         
         # Convert to numpy for OpenCV operations
-        img_np = (img.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+        img_np = (img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
         img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         
         # Draw predicted landmarks (red)
-        pred_points = pred_denorm[i].cpu().numpy()
+        pred_points = pred_denorm[i].numpy()
         for x, y in pred_points:
             cv2.circle(img_np, (int(x), int(y)), 2, (0, 0, 255), -1)
         
         # Draw target landmarks (green)
-        target_points = target_denorm[i].cpu().numpy()
+        target_points = target_denorm[i].numpy()
         for x, y in target_points:
             cv2.circle(img_np, (int(x), int(y)), 1, (0, 255, 0), -1)
         
@@ -394,8 +420,8 @@ class WFLWHeatmapTrainerMaxRegularization:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
         
-        # Loss function
-        self.criterion = nn.MSELoss()
+        # Loss function - SWITCH TO WING LOSS
+        self.criterion = WingLoss(w=10.0, epsilon=2.0)  # Instead of nn.MSELoss()
         
         # Optimizer with conservative settings
         self.optimizer = torch.optim.AdamW(
@@ -588,15 +614,15 @@ class WFLWHeatmapTrainerMaxRegularization:
             landmark_vis = create_landmark_visualization(viz_images, viz_pred_landmarks, viz_target_landmarks)
             self.writer.add_images('Val/Landmarks', landmark_vis, epoch)
             
-            # Original images
-            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-            orig_images = torch.clamp(viz_images * std + mean, 0, 1)
+            # Original images - ENSURE ON CPU
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).cpu()
+            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).cpu()
+            orig_images = torch.clamp(viz_images.cpu() * std + mean, 0, 1)
             self.writer.add_images('Val/Original_Images', orig_images, epoch)
             
             # Heatmap visualizations (every 5 epochs)
             if viz_heatmaps is not None and epoch % 5 == 0:
-                heatmap_vis = create_heatmap_visualization(viz_heatmaps)
+                heatmap_vis = create_heatmap_visualization(viz_heatmaps.cpu())  # ENSURE CPU
                 self.writer.add_images('Val/Heatmaps', heatmap_vis, epoch, dataformats='NCHW')
         
         return avg_loss, avg_nme
@@ -2421,3 +2447,4 @@ if __name__ == "__main__":
         print("\nTraining logs saved in:")
         print("  - ./runs/ (TensorBoard logs)")
         print("  - ./wflw_checkpoints_*/ (Model checkpoints)")
+        print("=" * 80)
